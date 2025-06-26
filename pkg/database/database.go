@@ -26,5 +26,8 @@ func Migrate(db *gorm.DB) error {
 		&domain.User{},
 		&domain.Book{},
 		&domain.Borrowing{},
+		&domain.Role{},
+		&domain.Permission{},
+		&domain.UserRole{},
 	)
 }

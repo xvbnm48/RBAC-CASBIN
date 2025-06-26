@@ -29,36 +29,41 @@ func main() {
 		log.Fatal("Failed to migrate database:", err)
 	}
 
-	// Initialize Casbin
-	enforcer, err := rbac.InitCasbin(db)
+	// Initialize repositories
+	userRepo := repository.NewUserRepository(db)
+	bookRepo := repository.NewBookRepository(db)
+	borrowingRepo := repository.NewBorrowingRepository(db)
+	roleRepo := repository.NewRoleRepository(db)
+	permissionRepo := repository.NewPermissionRepository(db)
+	userRoleRepo := repository.NewUserRoleRepository(db)
+
+	// Initialize RBAC service
+	rbacService, err := rbac.NewRBACService(db, userRoleRepo, roleRepo, permissionRepo)
 	if err != nil {
-		log.Fatal("Failed to initialize Casbin:", err)
+		log.Fatal("Failed to initialize RBAC service:", err)
 	}
 
 	// Setup default policies
-	if err := rbac.SetupDefaultPolicies(enforcer); err != nil {
+	if err := rbacService.SetupDefaultPolicies(); err != nil {
 		log.Fatal("Failed to setup default policies:", err)
 	}
 
 	// Initialize JWT auth
 	jwtAuth := auth.NewJWTAuth(cfg.JWT.SecretKey, cfg.JWT.ExpiryHours)
 
-	// Initialize repositories
-	userRepo := repository.NewUserRepository(db)
-	bookRepo := repository.NewBookRepository(db)
-	borrowingRepo := repository.NewBorrowingRepository(db)
-
 	// Initialize services
 	authService := service.NewAuthService(userRepo, jwtAuth)
 	bookService := service.NewBookService(bookRepo)
-	userService := service.NewUserService(userRepo)
 	borrowingService := service.NewBorrowingService(borrowingRepo, bookRepo)
+	roleService := service.NewRoleService(roleRepo, userRepo, userRoleRepo, permissionRepo)
+	permissionService := service.NewPermissionService(permissionRepo)
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	bookHandler := handler.NewBookHandler(bookService)
 	borrowingHandler := handler.NewBorrowingHandler(borrowingService)
-	userHandler := handler.NewUserHandler(userService)
+	roleHandler := handler.NewRoleHandler(roleService)
+	permissionHandler := handler.NewPermissionHandler(permissionService)
 
 	// Setup router
 	router := gin.Default()
@@ -77,7 +82,7 @@ func main() {
 	// Protected routes
 	api := router.Group("/api")
 	api.Use(middleware.AuthMiddleware(jwtAuth))
-	api.Use(middleware.RBACMiddleware(enforcer))
+	api.Use(middleware.RBACMiddleware(rbacService))
 	{
 		// Book routes
 		books := api.Group("/books")
@@ -96,10 +101,31 @@ func main() {
 			borrowings.POST("", borrowingHandler.BorrowBook)
 			borrowings.PUT("/:id/return", borrowingHandler.ReturnBook)
 		}
+
+		// Role management routes (Admin only)
+		roles := api.Group("/roles")
+		{
+			roles.GET("", roleHandler.GetAllRoles)
+			roles.GET("/:id", roleHandler.GetRoleByID)
+			roles.POST("", roleHandler.CreateRole)
+			roles.PUT("/:id", roleHandler.UpdateRole)
+			roles.DELETE("/:id", roleHandler.DeleteRole)
+			roles.POST("/assign", roleHandler.AssignRolesToUser)
+		}
+
+		// Permission management routes (Admin only)
+		permissions := api.Group("/permissions")
+		{
+			permissions.GET("", permissionHandler.GetAllPermissions)
+			permissions.GET("/:id", permissionHandler.GetPermissionByID)
+			permissions.POST("", permissionHandler.CreatePermission)
+			permissions.DELETE("/:id", permissionHandler.DeletePermission)
+		}
+
 		// User routes
 		users := api.Group("/users")
 		{
-			users.GET("", userHandler.GetAllUsers)
+			users.GET("/:id/roles", roleHandler.GetUserRoles)
 		}
 	}
 

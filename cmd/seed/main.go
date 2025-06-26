@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"library-api/internal/config"
 	"library-api/internal/domain"
+	"library-api/internal/repository"
 	"library-api/pkg/database"
+	"library-api/pkg/rbac"
 	"log"
 
 	"golang.org/x/crypto/bcrypt"
@@ -24,6 +26,22 @@ func main() {
 	// Run database migrations
 	if err := database.Migrate(db); err != nil {
 		log.Fatal("Failed to migrate database:", err)
+	}
+
+	// Initialize repositories for RBAC setup
+	roleRepo := repository.NewRoleRepository(db)
+	permissionRepo := repository.NewPermissionRepository(db)
+	userRoleRepo := repository.NewUserRoleRepository(db)
+
+	// Initialize RBAC service
+	rbacService, err := rbac.NewRBACService(db, userRoleRepo, roleRepo, permissionRepo)
+	if err != nil {
+		log.Fatal("Failed to initialize RBAC service:", err)
+	}
+
+	// Setup default policies and roles
+	if err := rbacService.SetupDefaultPolicies(); err != nil {
+		log.Fatal("Failed to setup default policies:", err)
 	}
 
 	// Create admin user
@@ -50,6 +68,35 @@ func main() {
 
 	if err := db.FirstOrCreate(&user, domain.User{Username: "user"}).Error; err != nil {
 		log.Fatal("Failed to create user:", err)
+	}
+
+	// Assign roles to users (idempotent)
+	adminRole, err := roleRepo.GetByName("admin")
+	if err != nil {
+		log.Fatal("Failed to get admin role:", err)
+	}
+
+	userRole, err := roleRepo.GetByName("user")
+	if err != nil {
+		log.Fatal("Failed to get user role:", err)
+	}
+
+	// Check if admin user already has admin role
+	existingAdminRoles, err := userRoleRepo.GetUserRoles(admin.ID)
+	if err == nil && len(existingAdminRoles) == 0 {
+		// Assign admin role to admin user only if not already assigned
+		if err := userRoleRepo.AssignRoles(admin.ID, []uint{adminRole.ID}); err != nil {
+			log.Printf("Failed to assign admin role: %v", err)
+		}
+	}
+
+	// Check if regular user already has user role
+	existingUserRoles, err := userRoleRepo.GetUserRoles(user.ID)
+	if err == nil && len(existingUserRoles) == 0 {
+		// Assign user role to regular user only if not already assigned
+		if err := userRoleRepo.AssignRoles(user.ID, []uint{userRole.ID}); err != nil {
+			log.Printf("Failed to assign user role: %v", err)
+		}
 	}
 
 	// Create sample books
