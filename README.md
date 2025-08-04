@@ -264,4 +264,3 @@ make clean
 
 ---
 
-**🎉 Sekarang sistem RBAC Anda sudah dynamic dan flexible! Admin dapat dengan mudah mengelola role dan permission melalui API.**
